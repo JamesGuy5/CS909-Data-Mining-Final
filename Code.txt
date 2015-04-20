@@ -1,0 +1,678 @@
+#Load in the data to the R workspace
+documentCorp <- read.csv("reutersCSV.csv")
+
+#Make a copy of just text component, for text processing
+docText <- documentCorp[,140]
+
+#needs to be converted to a text corpus, for use with tm package
+docTextCorpus <- VCorpus(VectorSource(docText))
+
+#now need to begin tokenising data
+
+#start by removing whitespace
+docTextCorpus <- tm_map(docTextCorpus, stripWhitespace)
+
+#covert to lower case
+docTextCorpus <- tm_map(docTextCorpus, content_transformer(tolower))
+
+#remove stopwords
+docTextCorpus <- tm_map(docTextCorpus, removeWords, stopwords("english"))
+
+#now data is processed, need to convert to bag of words, represented by
+#document term matrix in the tm package
+docTermMatrix <- DocumentTermMatrix(docTextCorpus)
+
+#next, I need to inspect the bag of words, to see its current state, as
+#no doubt it would be very sparse
+
+#by typing in the name of the document term matrix, information was 
+#returned that confirmed this to be the case
+docTermMatrix
+
+#as such, I used the "findFreqTerms" to isolate those terms that occur
+#a frequent number of times
+#after using different values, I found that by typing in:
+findFreqTerms(docTermMatrix,4000)
+
+#I got a list of 25 terms that occur the most often, that being more than
+#4000 times in the data. So, it would seem wise to narrow down the future
+#classifications to just these data columns as training data, as opposed to
+#all the other thousands of possible words in the vocabulary
+
+#I then created a reduced document term matrix, using a specified function
+#I used the removeSparseTerms function, and with a bit of experimentation I
+#found that the following command gave a matrix with 25 terms
+docTermMatrixReduced <- removeSparseTerms(docTermMatrix,0.887)
+
+#I then converted the reduced document term matrix into a form that could be
+#used by the classification and clustering algorithms, that being a data.frame
+testData <- as.data.frame(as.matrix(docTermMatrixReduced))
+
+#As I need to add the tag for each of the ten tags and subset the data, I make
+#a backup of the testData here so that it can be recovered later
+testDataBackup <- testData
+
+#Then, this test data needed to be tested alongside a class, so I isolated the class
+#values from the data as follows:
+testDataClass <- documentCorp[,x]
+#where x corresponds to the column number of the tag I am classifying, such as x=4 for
+#acquisitions
+
+#I then converted the numeric vector to a factor, so that r could understand it as a 
+#class attribute
+testDataClass <- as.factor(testDataClass)
+
+#I then appended this column to the end of the test data, called 'class'
+testData$class <- testDataClass
+
+#I then appended the purpose column to the testData
+testData$purpose <- documentCorp[,3]
+
+#I then needed to make a subset of just the data that is marked with 'train'
+testDataTrain <- testData[which(testData$purpose == 'train'),]
+
+#I then removed the purpose column as it was no longer needed, to leave just
+#the features and the class for each document
+testDataTrain$purpose <- NULL
+
+	#The following process shows how I built the model, made the prediction,
+	#constructed a confusion matrix and then extracted the results from this,
+	#using the acq tag as an example
+	
+	#for naive bayes
+	nb.acq.model <- naiveBayes(testDataTrain[1:9680, -26], testDataTrain[1:9680, 26])
+	nb.acq.pred <- predict(nb.acq.model, testDataTrain[-1:-9680, -26])
+	nb.acq.table <- table(pred=nb.acq.pred, actual=testDataTrain[-1:-9680, 26])
+	getStats(nb.acq.table)
+	
+	#for svm
+	svm.acq.model <- svm(class ~., data=testDataTrain[1:9680,])
+ 	svm.acq.pred <- predict(svm.acq.model, testDataTrain[-1:-9680,-26])
+ 	svm.acq.table <- table(pred=svm.acq.pred, actual=testDataTrain[-1:-9680,26])
+	getStats(svm.acq.table)
+	
+	#for random forests
+	rf.acq.model <- randomForest(class ~., data=testDataTrain[1:9680,])
+ 	rf.acq.pred <- predict(rf.acq.model, testDataTrain[-1:-9680,-26])
+ 	rf.acq.table <- table(pred=rf.acq.pred, actual=testDataTrain[-1:-9680,26])
+	getStats(rf.acq.table)
+
+		#To run a naive bayes model, svm, random forests respectively
+		nb.model.test <- naiveBayes(testData[-1:-100,-26], testData[-1:-100,26])
+		svm.model.test <- svm(class ~., data=testData[1:14200,])
+		rf.model.test <- randomForest(class ~., data=testData[1:14200,])
+
+		#I predicted with the model as follows
+		nb.pred.test <- predict(nb.model.test, testData[1:100,-26])
+		svm.pred.test <- predict(svm.model.test, testData[-1:-14200,-26])
+		rf.pred.test <- predict(rf.model.test, testData[-1:-14200,-26])
+
+		#I output the results as follows:
+		nb.table.test <- table(pred=nb.pred.test, actual=testData[1:100,26])
+		svm.table.test <- table(pred=svm.pred.test, actual=testData[-1:-14200,26])
+		rf.table.test <- table(pred=rf.pred.test, actual=testData[-1:-14200,26])
+
+#I built a function to input one of the tables and calculate the values
+#needed to evaluate the classifiers
+getStats <- function(table){
+    TP <- table[2,2]
+    TN <- table[1,1]
+    FP <- table[2,1]
+    FN <- table[1,2]
+    Precision <- ( TP / (TP + FP) ) 
+    Recall <- ( TP / (TP + FN) )
+    Accuracy <- ( (TP + TN) / (TP + TN + FP + FN))
+    F1 <- (2 * ((Precision * Recall) / (Precision + Recall)))
+    output <- list(TP=TP, FP=FP, FN=FN, TN=TN, Precision=Precision, Recall=Recall, Accuracy=Accuracy, F1=F1)
+    return(output)
+}
+
+#the steps for performing k-fold cross validation
+
+#isolate each class in a single vector
+docClassAcq <- documentCorp[,4]
+docClassAcq <- as.factor(docClassAcq)
+docClassCorn <- documentCorp[,23]
+docClassCorn <- as.factor(docClassCorn)
+docClassCrude <- documentCorp[,32]
+docClassCrude <- as.factor(docClassCrude)
+docClassEarn <- documentCorp[,39]
+docClassEarn <- as.factor(docClassEarn)
+docClassGrain <- documentCorp[,49]
+docClassGrain <- as.factor(docClassGrain)
+docClassInterest <- documentCorp[,59]
+docClassInterest <- as.factor(docClassInterest)
+docClassMoneyfx <- documentCorp[,77]
+docClassMoneyfx <- as.factor(docClassMoneyfx)
+docClassShip <- documentCorp[,112]
+docClassShip <- as.factor(docClassShip)
+docClassTrade <- documentCorp[,130]
+docClassTrade <- as.factor(docClassTrade)
+docClassWheat <- documentCorp[,134]
+docClassWheat <- as.factor(docClassWheat)
+
+#Append each class vector to the end of this data
+testData$acq <- docClassAcq
+testData$corn <- docClassCorn
+testData$crude <- docClassCrude
+testData$earn <- docClassEarn
+testData$grain <- docClassGrain
+testData$interest <- docClassInterest
+testData$moneyfx <- docClassMoneyfx
+testData$ship <- docClassShip
+testData$trade <- docClassTrade
+testData$wheat <- docClassWheat
+
+#Append the purpose column
+testData$purpose <- testDataPurpose
+
+#Create a new subset of only the training data
+trainData <- testData[which(testData$purpose == 'train'),]
+
+#I then made the decision to slightly truncate the data, as it had
+#14668 rows, so i reduced this by a neglible amount to 14600, for
+#ease of implementation of the next part
+
+#I first constructed a function for the naive bayes classifer, taking
+#as an argument the clumn number of the class being classified, so this
+#function needed to be run ten times, once for each class
+#I could have added another loop, from 26:35, and used the increment their
+#in place of the 'classColumn' attribute, but I preferred to do it ten
+#separate times, as there were a lot of results per run, so I found it
+#easier to read the results one class at a time
+#I recorded the output of my function in an excel table as well, for ease
+#of readability when writing the report
+
+kFoldValidationNB <- function(classColumn){
+currentFold <- 0
+
+truePositiveTotal <- 0
+trueNegativeTotal <- 0
+falsePositiveTotal <- 0
+falseNegativeTotal <- 0
+
+macroAccuracy <- 0
+macroPrecision <- 0
+macroRecall <- 0
+macroF1 <- 0
+
+resultsList <- list()
+
+	for (i in 1:10)
+	{
+		currentFoldMin <- 1 + ((i-1) * 1460)
+		currentFoldMax  <- (i * 1460)
+		
+		nb.model.fold <- naiveBayes(trainDataFinal[-currentFoldMin:-currentFoldMax, -26:-35], trainDataFinal[-currentFoldMin:-currentFoldMax, classColumn])
+		nb.pred.fold <- predict(nb.model.fold, trainDataFinal[currentFoldMin:currentFoldMax,-26:-35])
+		nb.table.fold <- table(pred=nb.pred.fold, actual=trainDataFinal[currentFoldMin:currentFoldMax, classColumn])
+		
+		results <- getStats(nb.table.fold)
+		
+		#extract variables needed from results
+		currentFoldAccuracy <- results$Accuracy
+		currentFoldPrecision <- results$Precision
+		currentFoldRecall <- results$Recall
+		currentFoldF1 <- results$F1
+		
+		#keep total of variables for micro average
+		truePositiveTotal <- truePositiveTotal + results$TP
+		trueNegativeTotal <- trueNegativeTotal + results$TN
+		falsePositiveTotal <- falsePositiveTotal + results$FP
+		falseNegativeTotal <- falseNegativeTotal + results$FN
+		
+		#keep fraction of current variables for macro average
+		macroAccuracy <- (macroAccuracy + (currentFoldAccuracy / 10))
+		macroPrecision <- (macroPrecision + (currentFoldPrecision / 10))
+		macroRecall <- (macroRecall + (currentFoldRecall / 10))
+		macroF1 <- (macroF1 + (currentFoldF1 / 10))
+		
+		#output for each fold
+		resultsList[((i-1)*3) + i] <- list(AccuracyFold=currentFoldAccuracy)
+		resultsList[((i-1)*3) + i+1] <- list(PrecisionFold=currentFoldPrecision)
+		resultsList[((i-1)*3) + i+2] <- list(RecallFold=currentFoldRecall)
+		resultsList[((i-1)*3) + i+3] <- list(F1Fold=currentFoldF1)
+
+	}
+	
+	#calculate micro precision and recall
+	microPrecision <-  (truePositiveTotal / (truePositiveTotal + falsePositiveTotal))
+	microRecall <- (truePositiveTotal / (truePositiveTotal + falseNegativeTotal))
+	
+	#output at end of loop
+	resultsList[41] <- list(MicroPrecision=microPrecision)
+	resultsList[42] <- list(MicroRecall=microRecall)
+	resultsList[43] <- list(MacroAccuracy=macroAccuracy)
+	resultsList[44] <- list(MacroPrecision=macroPrecision)
+	resultsList[45] <- list(MacroRecall=macroRecall)
+	
+	return(resultsList)
+}
+
+#It was then a matter of running the function for each class, storing the results in R, but
+#also writing them in excel for ease of use
+#So, each result for each class was stored in a separate list, to allow the results to be
+#viewed and brought back at a later date
+
+resultsNBAcq <- kFoldValidationNB(26)
+resultsNBCorn <- kFoldValidationNB(27)
+resultsNBCrude <- kFoldValidationNB(28)
+resultsNBEarn <- kFoldValidationNB(29)
+resultsNBGrain <- kFoldValidationNB(30)
+resultsNBInterest <- kFoldValidationNB(31)
+resultsNBMoneyfx <- kFoldValidationNB(32)
+resultsNBShip <- kFoldValidationNB(33)
+resultsNBTrade <- kFoldValidationNB(34)
+resultsNBWheat <- kFoldValidationNB(35)
+
+#Then, to facilitate the storing of the results in an easy-to-read excel file, I converted each
+#result list to a data frame, and then exported it to a .csv
+#this conversion to excel was necessary, as I noticed that I ommitted after running the algorithm
+#that I had ommitted a macro average f1 score, so i needed to calculate this after
+resultsNBAcq.df <- as.data.frame(resultsNBAcq)
+write.csv(resultsNBAcq.df, "resultsNBAcq.csv")
+
+resultsNBCorn.df <- as.data.frame(resultsNBCorn)
+write.csv(resultsNBCorn.df, "resultsNBCorn.csv")
+
+resultsNBCrude.df <- as.data.frame(resultsNBCrude)
+write.csv(resultsNBCrude.df, "resultsNBCrude.csv")
+
+resultsNBEarn.df <- as.data.frame(resultsNBEarn)
+write.csv(resultsNBEarn.df, "resultsNBEarn.csv")
+
+resultsNBGrain.df <- as.data.frame(resultsNBGrain)
+write.csv(resultsNBGrain.df, "resultsNBGrain.csv")
+
+resultsNBInterest.df <- as.data.frame(resultsNBInterest)
+write.csv(resultsNBInterest.df, "resultsNBInterest.csv")
+
+resultsNBMoneyfx.df <- as.data.frame(resultsNBMoneyfx)
+write.csv(resultsNBMoneyfx.df, "resultsNBMoneyfx.csv")
+
+resultsNBShip.df <- as.data.frame(resultsNBShip)
+write.csv(resultsNBShip.df, "resultsNBShip.csv")
+
+resultsNBTrade.df <- as.data.frame(resultsNBTrade)
+write.csv(resultsNBTrade.df, "resultsNBTrade.csv")
+
+resultsNBWheat.df <- as.data.frame(resultsNBWheat)
+write.csv(resultsNBWheat.df, "resultsNBWheat.csv")
+
+#I then needed to repeat the process for the SVM classifier, however the function
+#needed to be edited slightly, as the way data is input to the svm function is 
+#different to naive bayes. Furthermore, svm produced some 'NaN' results in early
+#tests, so I had to account for these and replace with 0 where necessary
+
+kFoldValidationSVM <- function(classColumn){
+currentFold <- 0
+
+truePositiveTotal <- 0
+trueNegativeTotal <- 0
+falsePositiveTotal <- 0
+falseNegativeTotal <- 0
+
+macroAccuracy <- 0
+macroPrecision <- 0
+macroRecall <- 0
+macroF1 <- 0
+
+resultsList <- list()
+
+	for (i in 1:10)
+	{
+		currentFoldMin <- 1 + ((i-1) * 1460)
+		currentFoldMax  <- (i * 1460)
+		
+		foldTrainData <- trainDataFinal[,1:25]
+		foldTrainData$class <- trainDataFinal[,classColumn]
+		
+		svm.model.fold <- svm(class ~., data=foldTrainData[-currentFoldMin:-currentFoldMax,])
+		svm.pred.fold <- predict(svm.model.fold, foldTrainData[currentFoldMin:currentFoldMax,-26])
+		svm.table.fold <- table(pred=svm.pred.fold, actual=foldTrainData[currentFoldMin:currentFoldMax, 26])
+		
+		results <- getStats(svm.table.fold)
+		
+		#extract variables needed from results
+		#there were seome results that produce a 'NaN' result, and so I needed to check for these and replace with 0
+		#where appropriate, to avoid an average of 'NaN' being output for the affected variables
+		
+
+		currentFoldAccuracy <- results$Accuracy
+		if(is.nan(currentFoldAccuracy)){
+			currentFoldAccuracy <- 0
+		}
+		
+		currentFoldPrecision <- results$Precision
+		if(is.nan(currentFoldPrecision)){
+			currentFoldPrecision <- 0
+		}
+
+		currentFoldRecall <- results$Recall
+		if(is.nan(currentFoldRecall)){
+			currentFoldRecall <- 0
+		}
+		
+		currentFoldF1 <- results$F1
+		if(is.nan(currentFoldF1)){
+			currentFoldF1 <- 0
+		}
+		
+		#keep total of variables for micro average
+		truePositiveTotal <- truePositiveTotal + results$TP
+		trueNegativeTotal <- trueNegativeTotal + results$TN
+		falsePositiveTotal <- falsePositiveTotal + results$FP
+		falseNegativeTotal <- falseNegativeTotal + results$FN
+		
+		#keep fraction of current variables for macro average
+		macroAccuracy <- (macroAccuracy + (currentFoldAccuracy / 10))
+		macroPrecision <- (macroPrecision + (currentFoldPrecision / 10))
+		macroRecall <- (macroRecall + (currentFoldRecall / 10))
+		macroF1 <- (macroF1 + (currentFoldF1 / 10))
+		
+		#output for each fold
+		resultsList[((i-1)*3) + i] <- list(AccuracyFold=currentFoldAccuracy)
+		resultsList[((i-1)*3) + i+1] <- list(PrecisionFold=currentFoldPrecision)
+		resultsList[((i-1)*3) + i+2] <- list(RecallFold=currentFoldRecall)
+		resultsList[((i-1)*3) + i+3] <- list(F1Fold=currentFoldF1)
+
+	}
+	
+	#calculate micro precision and recall
+	microPrecision <-  (truePositiveTotal / (truePositiveTotal + falsePositiveTotal))
+	microRecall <- (truePositiveTotal / (truePositiveTotal + falseNegativeTotal))
+	
+	#output at end of loop
+	resultsList[41] <- list(MicroPrecision=microPrecision)
+	resultsList[42] <- list(MicroRecall=microRecall)
+	resultsList[43] <- list(MacroAccuracy=macroAccuracy)
+	resultsList[44] <- list(MacroPrecision=macroPrecision)
+	resultsList[45] <- list(MacroRecall=macroRecall)
+	
+	return(resultsList)
+}
+
+#Similar to the naive bayes process, I needed to convert each result to a csv to allow for
+#faster addition to an excel file
+
+resultsSVMAcq <- kFoldValidationSVM(26)
+resultsSVMAcq.df <- as.data.frame(resultsSVMAcq)
+write.csv(resultsSVMAcq.df, "resultsSVMAcq.csv")
+
+resultsSVMCorn <- kFoldValidationSVM(27)
+resultsSVMCorn.df <- as.data.frame(resultsSVMCorn)
+write.csv(resultsSVMCorn.df, "resultsSVMCorn.csv")
+
+resultsSVMCrude <- kFoldValidationSVM(28)
+resultsSVMCrude.df <- as.data.frame(resultsSVMCrude)
+write.csv(resultsSVMCrude.df, "resultsSVMCrude.csv")
+
+resultsSVMEarn <- kFoldValidationSVM(29)
+resultsSVMEarn.df <- as.data.frame(resultsSVMEarn)
+write.csv(resultsSVMEarn.df, "resultsSVMEarn.csv")
+
+resultsSVMGrain <- kFoldValidationSVM(30)
+resultsSVMGrain.df <- as.data.frame(resultsSVMGrain)
+write.csv(resultsSVMGrain.df, "resultsSVMGrain.csv")
+
+resultsSVMInterest <- kFoldValidationSVM(31)
+resultsSVMInterest.df <- as.data.frame(resultsSVMInterest)
+write.csv(resultsSVMInterest.df, "resultsSVMInterest.csv")
+
+resultsSVMMoneyfx <- kFoldValidationSVM(32)
+resultsSVMMoneyfx.df <- as.data.frame(resultsSVMMoneyfx)
+write.csv(resultsSVMMoneyfx.df, "resultsSVMMoneyfx.csv")
+
+resultsSVMShip <- kFoldValidationSVM(33)
+resultsSVMShip.df <- as.data.frame(resultsSVMShip)
+write.csv(resultsSVMShip.df, "resultsSVMShip.csv")
+
+resultsSVMTrade <- kFoldValidationSVM(34)
+resultsSVMTrade.df <- as.data.frame(resultsSVMTrade)
+write.csv(resultsSVMTrade.df, "resultsSVMTrade.csv")
+
+resultsSVMWheat <- kFoldValidationSVM(35)
+resultsSVMWheat.df <- as.data.frame(resultsSVMWheat)
+write.csv(resultsSVMWheat.df, "resultsSVMWheat.csv")
+
+#Finally, the same process was repeated for the randomForest classifier
+#the function had to be edited slightly, only to change the references to the
+#svm classifier to the random forests classifier
+
+kFoldValidationRF <- function(classColumn){
+currentFold <- 0
+
+truePositiveTotal <- 0
+trueNegativeTotal <- 0
+falsePositiveTotal <- 0
+falseNegativeTotal <- 0
+
+macroAccuracy <- 0
+macroPrecision <- 0
+macroRecall <- 0
+macroF1 <- 0
+
+resultsList <- list()
+
+	for (i in 1:10)
+	{
+		currentFoldMin <- 1 + ((i-1) * 1460)
+		currentFoldMax  <- (i * 1460)
+		
+		foldTrainData <- trainDataFinal[,1:25]
+		foldTrainData$class <- trainDataFinal[,classColumn]
+		
+		rf.model.fold <- randomForest(class ~., data=foldTrainData[-currentFoldMin:-currentFoldMax,])
+		rf.pred.fold <- predict(rf.model.fold, foldTrainData[currentFoldMin:currentFoldMax,-26])
+		rf.table.fold <- table(pred=rf.pred.fold, actual=foldTrainData[currentFoldMin:currentFoldMax, 26])
+		
+		results <- getStats(rf.table.fold)
+		
+		#extract variables needed from results
+		#there were seome results that produce a 'NaN' result, and so I needed to check for these and replace with 0
+		#where appropriate, to avoid an average of 'NaN' being output for the affected variables
+		
+
+		currentFoldAccuracy <- results$Accuracy
+		if(is.nan(currentFoldAccuracy)){
+			currentFoldAccuracy <- 0
+		}
+		
+		currentFoldPrecision <- results$Precision
+		if(is.nan(currentFoldPrecision)){
+			currentFoldPrecision <- 0
+		}
+
+		currentFoldRecall <- results$Recall
+		if(is.nan(currentFoldRecall)){
+			currentFoldRecall <- 0
+		}
+		
+		currentFoldF1 <- results$F1
+		if(is.nan(currentFoldF1)){
+			currentFoldF1 <- 0
+		}
+		
+		#keep total of variables for micro average
+		truePositiveTotal <- truePositiveTotal + results$TP
+		trueNegativeTotal <- trueNegativeTotal + results$TN
+		falsePositiveTotal <- falsePositiveTotal + results$FP
+		falseNegativeTotal <- falseNegativeTotal + results$FN
+		
+		#keep fraction of current variables for macro average
+		macroAccuracy <- (macroAccuracy + (currentFoldAccuracy / 10))
+		macroPrecision <- (macroPrecision + (currentFoldPrecision / 10))
+		macroRecall <- (macroRecall + (currentFoldRecall / 10))
+		macroF1 <- (macroF1 + (currentFoldF1 / 10))
+		
+		#output for each fold
+		resultsList[((i-1)*3) + i] <- list(AccuracyFold=currentFoldAccuracy)
+		resultsList[((i-1)*3) + i+1] <- list(PrecisionFold=currentFoldPrecision)
+		resultsList[((i-1)*3) + i+2] <- list(RecallFold=currentFoldRecall)
+		resultsList[((i-1)*3) + i+3] <- list(F1Fold=currentFoldF1)
+
+	}
+	
+	#calculate micro precision and recall
+	microPrecision <-  (truePositiveTotal / (truePositiveTotal + falsePositiveTotal))
+	microRecall <- (truePositiveTotal / (truePositiveTotal + falseNegativeTotal))
+	
+	#output at end of loop
+	resultsList[41] <- list(MicroPrecision=microPrecision)
+	resultsList[42] <- list(MicroRecall=microRecall)
+	resultsList[43] <- list(MacroAccuracy=macroAccuracy)
+	resultsList[44] <- list(MacroPrecision=macroPrecision)
+	resultsList[45] <- list(MacroRecall=macroRecall)
+	
+	return(resultsList)
+}
+
+#Similar to the last two classifiers, I needed to convert each result to a csv to allow for
+#faster addition to an excel file
+resultsRFAcq <- kFoldValidationRF(26)
+resultsRFAcq.df <- as.data.frame(resultsRFAcq)
+write.csv(resultsRFAcq.df, "resultsRFAcq.csv")
+
+resultsRFCorn <- kFoldValidationRF(27)
+resultsRFCorn.df <- as.data.frame(resultsRFCorn)
+write.csv(resultsRFCorn.df, "resultsRFCorn.csv")
+
+resultsRFCrude <- kFoldValidationRF(28)
+resultsRFCrude.df <- as.data.frame(resultsRFCrude)
+write.csv(resultsRFCrude.df, "resultsRFCrude.csv")
+
+resultsRFEarn <- kFoldValidationRF(29)
+resultsRFEarn.df <- as.data.frame(resultsRFEarn)
+write.csv(resultsRFEarn.df, "resultsRFEarn.csv")
+
+resultsRFGrain <- kFoldValidationRF(30)
+resultsRFGrain.df <- as.data.frame(resultsRFGrain)
+write.csv(resultsRFGrain.df, "resultsRFGrain.csv")
+
+resultsRFInterest <- kFoldValidationRF(31)
+resultsRFInterest.df <- as.data.frame(resultsRFInterest)
+write.csv(resultsRFInterest.df, "resultsRFInterest.csv")
+
+resultsRFMoneyfx <- kFoldValidationRF(32)
+resultsRFMoneyfx.df <- as.data.frame(resultsRFMoneyfx)
+write.csv(resultsRFMoneyfx.df, "resultsRFMoneyfx.csv")
+
+resultsRFShip <- kFoldValidationRF(33)
+resultsRFShip.df <- as.data.frame(resultsRFShip)
+write.csv(resultsRFShip.df, "resultsRFShip.csv")
+
+resultsRFTrade <- kFoldValidationRF(34)
+resultsRFTrade.df <- as.data.frame(resultsRFTrade)
+write.csv(resultsRFTrade.df, "resultsRFTrade.csv")
+
+resultsRFWheat <- kFoldValidationRF(35)
+resultsRFWheat.df <- as.data.frame(resultsRFWheat)
+write.csv(resultsRFWheat.df, "resultsRFWheat.csv")
+
+#for the final naive bayes model, I tested it using all data marked 'train' as training
+#data, and all data marked 'test' as testing data for a final result
+completeTrainData <- testData[which(testData$purpose == 'train'),]
+completeTestData <- testData[which(testData$purpose == 'test'),]
+
+#I then built a function, adapted from the previous functions to go through all ten classes,
+#Output their individual results, as well as averages over all ten
+
+finalClassification <- function()
+{
+
+truePositiveTotal <- 0
+trueNegativeTotal <- 0
+falsePositiveTotal <- 0
+falseNegativeTotal <- 0
+
+macroAccuracy <- 0
+macroPrecision <- 0
+macroRecall <- 0
+macroF1 <- 0
+
+resultsList <- list()
+
+	for (i in 1:10)
+	{
+		nb.model.final <- naiveBayes(completeTrainData[,1:25], completeTrainData[,(i+25)])
+		nb.pred.final <- predict(nb.model.final, completeTestData[,1:25])
+		nb.table.final <- table(pred=nb.pred.final, actual=completeTestData[,(i+25)])
+
+		results <- getStats(nb.table.final)
+		
+		#extract variables needed from results
+		currentClassAccuracy <- results$Accuracy
+		currentClassPrecision <- results$Precision
+		currentClassRecall <- results$Recall
+		currentClassF1 <- results$F1
+		
+		#keep total of variables for micro average
+		truePositiveTotal <- truePositiveTotal + results$TP
+		trueNegativeTotal <- trueNegativeTotal + results$TN
+		falsePositiveTotal <- falsePositiveTotal + results$FP
+		falseNegativeTotal <- falseNegativeTotal + results$FN
+		
+		#keep fraction of current variables for macro average
+		macroAccuracy <- (macroAccuracy + (currentClassAccuracy / 10))
+		macroPrecision <- (macroPrecision + (currentClassPrecision / 10))
+		macroRecall <- (macroRecall + (currentClassRecall / 10))
+		macroF1 <- (macroF1 + (currentClassF1 / 10))
+		
+		#output for each class
+		resultsList[((i-1)*3) + i] <- list(AccuracyFold=currentClassAccuracy)
+		resultsList[((i-1)*3) + i+1] <- list(PrecisionFold=currentClassPrecision)
+		resultsList[((i-1)*3) + i+2] <- list(RecallFold=currentClassRecall)
+		resultsList[((i-1)*3) + i+3] <- list(F1Fold=currentClassF1)
+	}
+	
+	#calculate micro precision and recall
+	microPrecision <-  (truePositiveTotal / (truePositiveTotal + falsePositiveTotal))
+	microRecall <- (truePositiveTotal / (truePositiveTotal + falseNegativeTotal))
+
+	#output at end of loop
+	resultsList[41] <- list(MicroPrecision=microPrecision)
+	resultsList[42] <- list(MicroRecall=microRecall)
+	resultsList[43] <- list(MacroAccuracy=macroAccuracy)
+	resultsList[44] <- list(MacroPrecision=macroPrecision)
+	resultsList[45] <- list(MacroRecall=macroRecall)
+	
+	return(resultsList)
+}
+
+#As before, I then ran the function, and coverted the results to a data frame and then
+#a csv, to allow it to be easily imported to excel (for ease of readability when writing
+#the report
+nbFinalResults <- finalClassification()
+nbFinalResults.df <- as.data.frame(nbFinalResults)
+write.csv(nbFinalResults.df, "nbFinalResults.csv")
+
+
+#CLUSTERING
+
+#Firstly, I ran a kmeans clusterin across the entire data set. This produced a clustering
+#with two clusters, as I thought it would be appropriate to generate two if there are two
+#possible outcomes for each class
+result <- kmeans(testData[,1:25], 2)
+
+#To see how well this clustering performed, I produced a table as follows, comparing it to
+#the value of one of the better performing tags
+table(testData$earn, resul$cluster)
+
+#Then, to allow me to view the results of the clustering further, I plotted two of the more
+#popular features against eachother
+testDatapct <- testData$pct
+testDatamln <- testData$mln
+dataNew <- cbind(testDatapct, testDatamln)
+plot(dataNew, col=results$cluster
+
+#I could then compare this to the actual earn class values
+plot(dataNew, col=testData$earn)
+
+#I then tried other clustering algorithms, to see if they could produce a better result.
+#The first was DBSCAN, as follows
+resultDBScan <- dbscan(data=testData[,1:25], eps=0.1, MinPts = 5)
+
+#the above produced several hundred clusters, so I tweaked the parameters to try and narrow it down
+resultDBScan <- dbscan(data=testData[,1:25], eps=2, MinPts = 5)
+
+#the above produced 11 clusters, with the first two being far larger than the others 
